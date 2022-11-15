@@ -1,0 +1,159 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidytext)
+library(ggplot2)
+library(tm)
+library(topicmodels)
+library(stm)
+```
+
+ 
+
+```{r}
+imdb <- read.csv("IMDB Dataset.csv")
+re <- which(is.na(imdb$review))
+if(length(re)>0) imdb <- imdb[-re,]
+re <- which(duplicated(imdb$review))
+if(length(re)>0) imdb <- imdb[-re,]
+```
+
+```{r}
+reviews <- imdb %>% 
+  mutate(review_number = row_number()) %>%
+  separate(review,c("1", "2", "3", "4"), sep="<br /><br />|\\.", convert = TRUE) %>% 
+  pivot_longer(c("1", "2", "3", "4"), names_to = "lines", names_transform = list(lines = as.integer), values_to = "text") %>%
+  arrange(review_number, lines) %>%
+  relocate(text) %>%
+  tibble()
+```
+
+```{r}
+tidy_reviews_origin <- reviews %>% unnest_tokens(word, text)%>%
+  count(review_number, word, sort = TRUE)
+total_words_origin <- tidy_reviews_origin %>% group_by(review_number) %>%
+  summarize(total = sum(n))
+
+
+reviews_words_origin <- left_join(tidy_reviews_origin, total_words_origin)
+review_tf_idf_origin <- reviews_words_origin %>%
+  bind_tf_idf(word, review_number, n)
+review_tf_idf_origin %>%
+  select(-total) %>%
+  arrange(desc(tf_idf))
+
+```
+
+
+
+
+
+
+funny ?
+```{r}
+data(stop_words)
+custom_stop_words <- bind_rows(tibble(word = c("movie", "film", "movies", "time", "times", "films", "people", "story","tv","watching","watch","playing","actor","acting","job","script","hour","guys","audience","love","thinking","told","characters","life","character","remember","lot","funny","actors","start","actor","director","watched","watch","cast","actor","day","night","fans","bunch","named","named","20","cheap","person","make","makes","person","including","street","7","11","add","ahh","uh","um","leave","6","pretty","series", "0","1","found","fan","minutes","dvd","2","excellent","read","screen","played","playing","plays","idea","low","2","main","6","ten","cover","agree","aaah","keyword","awwww","goodbye","play","00","00am","00pm","100","quickly","worst","set","role","feel","guy","ture","based","version","completely","absolutely","top","simply","piece","takes","take","live","play","reason","special","effects","loves","loved","video","half","terrible","wonderful","sense","written","piece","mind","title","true","original","scene","bit","10","bad","ago","line","scenes","plot","3","5","NA","late","totally","city","country","17"), lexicon = c("custom")), stop_words)
+
+tidy_reviews <- reviews %>% unnest_tokens(word, text)%>%
+  count(review_number, word, sort = TRUE)
+tidy_reviews <- tidy_reviews %>%
+  anti_join(custom_stop_words)
+
+total_words <- tidy_reviews %>% group_by(review_number) %>%
+  summarize(total = sum(n))
+
+reviews_words <- left_join(tidy_reviews, total_words)
+```
+
+
+
+
+```{r}
+ freq_by_rank <-reviews_words %>% 
+  group_by(review_number) %>% 
+  mutate(rank = row_number(), 
+         `term frequency` = n/total) %>%
+  ungroup()
+```
+
+```{r}
+review_tf_idf <- reviews_words %>%
+  bind_tf_idf(word, review_number, n)
+review_tf_idf %>%
+  select(-total) %>%
+  arrange(desc(tf_idf))
+```
+
+```{r}
+c <- reviews %>% unnest_tokens(word, text)
+d <- c[c$word == "funny",]
+e <- drop_na(d)
+```
+
+```{r}
+tidy_reviews <- drop_na(tidy_reviews)
+review_dtm <- tidy_reviews %>%
+  cast_dtm(review_number, word,n)
+
+```
+
+```{r}
+review_lda2 <- LDA(review_dtm,method = "Gibbs" ,k=8,control = list(seed = 1234))
+```
+```{r}
+
+d2 <- topic_diagnostics(review_lda2, review_dtm)
+
+```
+
+```{r}
+review_lda <- LDA(review_dtm,method = "Gibbs" ,k=10,control = list(seed = 1234))
+review_lda
+```
+
+```{r}
+
+d1 <- topic_diagnostics(review_lda, review_dtm)
+```
+```{r}
+mod_log_lik = numeric(10)
+mod_perplexity = numeric(10)
+for (i in 2:20) {
+mod = LDA(review_dtm, k=i, method="Gibbs"
+,
+control=list(alpha=0.5, iter=1000, seed=12345, thin=1))
+mod_log_lik[i] = logLik(mod)
+mod_perplexity[i] = perplexity(mod, review_dtm)
+}
+```
+
+```{r}
+review_topics <- tidy(review_lda, matrix="beta")
+review_topics
+```
+
+```{r}
+top_terms <- review_topics %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>% 
+  ungroup() %>%
+  arrange(topic, -beta)
+```
+
+```{r}
+top_terms %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered()
+```
+```{r}
+review_documents <- tidy(review_lda, matrix="gamma")
+review_documents
+```
+

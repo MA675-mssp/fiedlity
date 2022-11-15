@@ -1,0 +1,253 @@
+---
+title: "notes"
+output: html_document
+date: "2022-10-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidytext)
+library(ggplot2)
+library(tm)
+library(topicmodels)
+library(stm)
+```
+
+```{r}
+# %>% separate(review,c("line1", "line2", "line3", "line4"), sep="<br /><br />") %>% unite(review, c("line1", "line2", "line3", "line4"), sep = " ", na.rm = TRUE)
+imdb <- read.csv("IMDB Dataset.csv")
+re <- which(is.na(imdb$review))
+if(length(re)>0) imdb <- imdb[-re,]
+re <- which(duplicated(imdb$review))
+if(length(re)>0) imdb <- imdb[-re,]
+
+reviews <- imdb %>% 
+  mutate(review_number = row_number()) %>%
+  separate(review,c("1", "2", "3", "4"), sep="<br /><br />|\\.", convert = TRUE) %>% 
+  pivot_longer(c("1", "2", "3", "4"), names_to = "lines", names_transform = list(lines = as.integer), values_to = "text") %>%
+  arrange(review_number, lines) %>%
+  relocate(text) %>%
+  tibble()
+
+# true_sentiment <- imdb %>% select(sentiment) %>% mutate(review_number = row_number()) %>% tibble()
+
+```
+```{r}
+temp <- textProcessor(imdb$review, 
+                      metadata = imdb,  
+                      lowercase=TRUE, 
+                      removestopwords=TRUE, 
+                      removenumbers=TRUE,  
+                      removepunctuation=TRUE, 
+                      wordLengths=c(3,Inf),
+                      stem=TRUE,
+                      onlycharacter= FALSE, 
+                      striphtml=TRUE, 
+                      customstopwords=NULL)
+
+
+```
+```{r}
+docs <- temp$documents 
+meta <- temp$meta 
+vocab <- temp$vocab 
+
+tds_stm <- stm(documents=docs, 
+               data=meta,
+               vocab=vocab, 
+               prevalence =NULL,
+               K=20,
+               max.em.its=25,
+               verbose = FALSE,
+               gamma.prior='L1')
+```
+
+```{r}
+tidy_reviews <- reviews %>% unnest_tokens(word, text) 
+
+```
+
+```{r}
+data(stop_words)
+custom_stop_words <- bind_rows(tibble(word = c("movie", "film", "movies", "time","story","plot","films","director","watch","characters", "watching","watched", "scenes", "tv","scene", "actors", "series", "lot", 'bad','people','version', '10', "dvd"),  
+                                      lexicon = c("custom")), 
+                               stop_words)
+tidy_reviews <- tidy_reviews %>%
+  anti_join(custom_stop_words)
+```
+```{r}
+tidy_reviews %>%
+  count(word, sort = TRUE)
+```
+
+```{r}
+# correct_per <- function(x,y){
+#   a <- NA
+#   ifelse(x==y, a <- a+1, 0)
+#   return(sum(a)/length(x))
+# }
+```
+
+# Simple Sentimental analysis 
+
+```{r}
+afinn <- get_sentiments("afinn")
+test1 <- tidy_reviews %>% inner_join(afinn) %>% group_by(review_number) %>% summarise(sum=sum(value)) %>% 
+  mutate(result=ifelse(sum<0, "negative", "positive")) %>% right_join(true_sentiment) %>%
+  mutate(correct=ifelse(result==sentiment, 1, 0))
+
+test1$correct[is.na(test1$correct)] = 0
+correct_per <- sum(test1$correct)/50000 * 100
+
+cat("\nThe correct percentage of using simple sentimental analysis is", correct_per)
+```
+
+# sentimental analysis using bigrams
+
+```{r}
+reviews_bigrams <- reviews %>% unnest_tokens(bigram, text, token = "ngrams", n = 2) 
+bigrams_separated <- reviews_bigrams %>% separate(bigram, c("word1", "word2"), sep = " ")
+
+```
+```{r}
+negation_words <- c("not", "no", "never", "without","isn't","aren't","doesn't","don't","can't", "cannot", "won't")
+AFINN <- get_sentiments("afinn")
+negated_words <- bigrams_separated %>%
+  filter(word1 %in% negation_words) %>%
+  inner_join(AFINN, by = c(word2 = "word")) 
+
+# The length of negate_words is potential 5252 reviews to be reverted, which is potentially a maximum correct percentage increase of around 10%.
+```
+
+# Sentimental analysis with categorical regression
+
+```{r}
+
+
+```
+
+
+# LDA 
+
+```{r}
+review_dtm <- tidy_reviews %>% select(-sentiment,-lines) %>% 
+  group_by(review_number) %>% count(word) %>% arrange(review_number,desc(n)) %>%
+  cast_dtm(review_number, word,n)
+
+```
+
+```{r}
+review_lda <- LDA(review_dtm, k=8,  method = "Gibb",control = list(seed = 1234))
+review_lda
+```
+
+```{r}
+review_topics <- tidy(review_lda, matrix="beta")
+review_topics
+```
+
+```{r}
+top_terms <- review_topics %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>% 
+  ungroup() %>%
+  arrange(topic, -beta)
+```
+
+```{r}
+
+top_terms %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered()
+
+```
+```{r}
+post_results <- posterior(review_lda)
+prob <- post_results$topics
+```
+
+```{r}
+contribs <- topics(lda_model, threshold=0.3)
+```
+
+```{r}
+review_documents <- tidy(review_lda, matrix="gamma")
+review_documents
+```
+
+
+```{r}
+
+
+
+# function that takes in a dataframe and the name of the columns
+# with the document texts and the topic labels. If plot is set to
+# false it will return the tf-idf output rather than a plot.
+top_terms_by_topic_tfidf <- function(text_df, text_column, group_column, plot = T){
+    # name for the column we're going to unnest_tokens_ to
+    # (you only need to worry about enquo stuff if you're
+    # writing a function using using tidyverse packages)
+    group_column <- enquo(group_column)
+    text_column <- enquo(text_column)
+    
+    # get the count of each word in each review
+    words <- text_df %>%
+      unnest_tokens(word, !!text_column) %>%
+      count(!!group_column, word) %>% 
+      ungroup()
+
+    # get the number of words per text
+    total_words <- words %>% 
+      group_by(!!group_column) %>% 
+      summarize(total = sum(n))
+
+    # combine the two dataframes we just made
+    words <- left_join(words, total_words)
+
+    # get the tf_idf & order the words by degree of relevence
+    tf_idf <- words %>%
+      bind_tf_idf(word, !!group_column, n) %>%
+      select(-total) %>%
+      arrange(desc(tf_idf)) %>%
+      mutate(word = factor(word, levels = rev(unique(word))))
+    
+    if(plot == T){
+        # convert "group" into a quote of a name
+        # (this is due to funkiness with calling ggplot2
+        # in functions)
+        group_name <- quo_name(group_column)
+        
+        # plot the 10 most informative terms per topic
+        tf_idf %>% 
+          group_by(!!group_column) %>% 
+          top_n(10) %>% 
+          ungroup %>%
+          ggplot(aes(word, tf_idf, fill = as.factor(group_name))) +
+          geom_col(show.legend = FALSE) +
+          labs(x = NULL, y = "tf-idf") +
+          facet_wrap(reformulate(group_name), scales = "free") +
+          coord_flip()
+    }else{
+        # return the entire tf_idf dataframe
+        return(tf_idf)
+    }
+}
+```
+
+```{r}
+top_terms_by_topic_tfidf(text_df = tidy_reviews, 
+                         text_column = word,
+                         group_column = sentiment,
+                         plot = T)
+```
+
+
+
+
+
+
+
