@@ -1,0 +1,43 @@
+---
+title: "Fund"
+author: "Tao Guo"
+date: "2022-11-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(png)
+library(jpeg)
+library(grid)
+library(tidyverse)
+library(tidytext)
+library(knitr)
+library(topicmodels)
+library(tm)
+library()
+fund <- read.xlsx("Fund_Strategy_Data.xlsx",1)
+```
+
+
+
+```{r cars}
+library(png)
+library(jpeg)
+library(grid)
+library(tidyverse)
+library(tidytext)
+library(knitr)
+library(topicmodels)
+library(tm)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
